@@ -63,9 +63,10 @@ export default function WebSocketPage() {
     }, [addImage, addGlb]);
 
     return (
-        <div>
-            <h1>WebSocket Connection</h1>
-            <p>Listening for new images and 3D models...</p>
-        </div>
+        // <div>
+        //     <h1>WebSocket Connection</h1>
+        //     <p>Listening for new images and 3D models...</p>
+        // </div>
+        <></>
     );
 }

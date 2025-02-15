@@ -10,7 +10,7 @@ const MediaGallery = dynamic(() => import("./components/MediaGallery"), {
 export default function HomePage() {
     return (
         <div>
-            <WebSocketPage />
+            {/* <WebSocketPage /> */}
             <MediaGallery />
         </div>
     );
