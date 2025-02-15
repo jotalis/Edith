@@ -172,3 +172,6 @@ cython_debug/
 
 # checkpoints
 ml/checkpoints/
+
+# google api key
+ml/google_api_key.txt
