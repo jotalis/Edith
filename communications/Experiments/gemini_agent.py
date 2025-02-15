@@ -1,11 +1,24 @@
 import asyncio
 import os
-import sys
 import traceback
+import json
 
 import pyaudio
 from google import genai
 from dotenv import load_dotenv
+
+import websockets  # <-- New import for the websocket server
+
+from google.genai.types import (
+    FunctionDeclaration,
+    GoogleSearch,
+    LiveConnectConfig,
+    PrebuiltVoiceConfig,
+    SpeechConfig,
+    Tool,
+    ToolCodeExecution,
+    VoiceConfig,
+)
 
 # Load environment variables from a .env file
 load_dotenv()
@@ -17,23 +30,72 @@ SEND_SAMPLE_RATE = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE = 1024
 
+find_object = FunctionDeclaration(
+    name="find_object",
+    description=(
+        "Find an object by retrieving the details and location of a specified object. "
+        "This function should be called when the user asks about the whereabouts of an object, "
+        "such as 'Help me find my keys' or 'Where is my laptop?'."
+    ),
+    parameters={
+        "type": "OBJECT",
+        "properties": {
+            "object_name": {
+                "type": "STRING",
+                "description": "The name of the object to be located.",
+            },
+        },
+        "required": ["object_name"],
+    },
+)
+
+get_current_weather = FunctionDeclaration(
+    name="get_current_weather",
+    description="Get current weather in the given location",
+    parameters={
+        "type": "OBJECT",
+        "properties": {
+            "location": {
+                "type": "STRING",
+            },
+        },
+    },
+)
+
 # GenAI model configuration
 MODEL = "models/gemini-2.0-flash-exp"
-CONFIG = {"generation_config": {"response_modalities": ["AUDIO"]}}
 
-# Initialize the GenAI client using the GOOGLE_API_KEY from the .env file.
-CLIENT = genai.Client(http_options={"api_version": "v1alpha"}, api_key=os.getenv("GEMINI_API_KEY"))
+CONFIG = LiveConnectConfig(
+    response_modalities=["AUDIO"],
+    tools=[Tool(function_declarations=[get_current_weather, find_object])],
+    speech_config=SpeechConfig(
+        voice_config=VoiceConfig(
+            prebuilt_voice_config=PrebuiltVoiceConfig(
+                voice_name="Aoede",
+            )
+        )
+    ),
+)
+
+# Initialize the GenAI client using the GEMINI_API_KEY from the .env file.
+CLIENT = genai.Client(
+    http_options={"api_version": "v1alpha"}, api_key=os.getenv("GEMINI_API_KEY")
+)
+
 
 class AudioChat:
     def __init__(self):
-        self.audio_in_queue = asyncio.Queue()        # Queue for incoming audio from the API.
-        self.out_queue = asyncio.Queue(maxsize=5)      # Queue for outgoing microphone audio.
+        self.audio_in_queue = asyncio.Queue()  # Queue for incoming audio from the API.
+        self.out_queue = asyncio.Queue(maxsize=5)  # Queue for outgoing microphone audio.
         self.session = None
         self.pya = pyaudio.PyAudio()
+        # Event to control whether audio from the mic should be sent (disabled by default)
+        self.audio_enabled_event = asyncio.Event()
 
     async def listen_audio(self):
         """
         Capture audio from the default microphone and enqueue it for sending.
+        Audio is captured only if the audio_enabled_event is set (e.g. after a button press).
         """
         mic_info = self.pya.get_default_input_device_info()
         audio_stream = await asyncio.to_thread(
@@ -48,30 +110,48 @@ class AudioChat:
         # In debug mode, disable exception_on_overflow.
         kwargs = {"exception_on_overflow": False} if __debug__ else {}
         while True:
-            data = await asyncio.to_thread(audio_stream.read, CHUNK_SIZE, **kwargs)
-            await self.out_queue.put({"data": data, "mime_type": "audio/pcm"})
+            if self.audio_enabled_event.is_set():
+                data = await asyncio.to_thread(audio_stream.read, CHUNK_SIZE, **kwargs)
+                await self.out_queue.put({"data": data, "mime_type": "audio/pcm"})
+            else:
+                # If audio is not enabled, wait a bit before checking again.
+                await asyncio.sleep(0.1)
 
     async def send_realtime(self):
         """
-        Read audio chunks from the output queue and send them to the GenAI session.
+        Read audio chunks from the output queue and send them to the Gemini session.
         """
         while True:
             msg = await self.out_queue.get()
             await self.session.send(input=msg)
 
+    async def get_object(self, object_name: str) -> str:
+        """
+        Dummy implementation for a function call from Gemini.
+        Replace this with your own object lookup logic.
+        """
+        result = f"Object '{object_name}' located at the default coordinates (42.3601, -71.0589)."
+        return result
+
     async def receive_audio(self):
         """
-        Receive audio responses from the GenAI session and enqueue them for playback.
-        Any text responses (if provided) are printed to the console.
+        Receive audio responses from the Gemini session and enqueue them for playback.
+        Additionally, if the response includes a function call, handle it.
         """
         while True:
             turn = self.session.receive()
             async for response in turn:
+                if response.tool_call:
+                    for function_call in response.tool_call.function_calls:
+                        print("function_call", function_call)
+                        if function_call.name == "find_object":
+                            print(function_call.args["object_name"])
+                            result = await self.get_object(function_call.args["object_name"])
+                            print(result)
+                            await self.session.send(input=result, end_of_turn=True)
                 if response.data:
                     self.audio_in_queue.put_nowait(response.data)
-                if response.text:
-                    print(response.text, end="")
-            # Clear any leftover audio (useful if an interruption occurs).
+
             while not self.audio_in_queue.empty():
                 self.audio_in_queue.get_nowait()
 
@@ -90,10 +170,33 @@ class AudioChat:
             bytestream = await self.audio_in_queue.get()
             await asyncio.to_thread(stream.write, bytestream)
 
+    async def websocket_handler(self, websocket, path=None):
+        """
+        Handle incoming WebSocket connections from the microcontroller.
+        Expect messages like "BUTTON_PRESSED" and "BUTTON_RELEASED".
+        """
+        async for message in websocket:
+            print("Received message from microcontroller:", message)
+            if message == "BUTTON_PRESSED":
+                print("Enabling audio transmission.")
+                self.audio_enabled_event.set()
+            elif message == "BUTTON_RELEASED":
+                print("Disabling audio transmission.")
+                self.audio_enabled_event.clear()
+            else:
+                print("Unknown command received:", message)
+
+    async def run_websocket_server(self):
+        """
+        Run a WebSocket server to listen for commands from the microcontroller.
+        """
+        async with websockets.serve(self.websocket_handler, "0.0.0.0", 8765):
+            print("WebSocket server started on ws://0.0.0.0:8765")
+            await asyncio.Future()  # run forever
+
     async def run(self):
         """
-        Establish the GenAI session and start all asynchronous audio tasks.
-        Runs indefinitely until canceled (e.g., via Ctrl+C).
+        Establish the Gemini session, start audio tasks, and run the WebSocket server concurrently.
         """
         try:
             async with CLIENT.aio.live.connect(model=MODEL, config=CONFIG) as session, asyncio.TaskGroup() as tg:
@@ -102,6 +205,7 @@ class AudioChat:
                 tg.create_task(self.listen_audio())
                 tg.create_task(self.receive_audio())
                 tg.create_task(self.play_audio())
+                tg.create_task(self.run_websocket_server())
                 await asyncio.Future()  # Run indefinitely.
         except asyncio.CancelledError:
             pass
