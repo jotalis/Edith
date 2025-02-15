@@ -91,6 +91,8 @@ class AudioChat:
         self.pya = pyaudio.PyAudio()
         # Event to control whether audio from the mic should be sent (disabled by default)
         self.audio_enabled_event = asyncio.Event()
+        # Set to keep track of connected websocket clients (microcontrollers)
+        self.ws_connections = set()
 
     async def listen_audio(self):
         """
@@ -130,6 +132,13 @@ class AudioChat:
         Dummy implementation for a function call from Gemini.
         Replace this with your own object lookup logic.
         """
+        # Broadcast "VIBRATE" message to all connected microcontrollers
+        if self.ws_connections:
+            for ws in self.ws_connections.copy():
+                try:
+                    await ws.send("VIBRATE")
+                except Exception as e:
+                    print("Error sending VIBRATE message:", e)
         result = f"Object '{object_name}' located at the default coordinates (42.3601, -71.0589)."
         return result
 
@@ -175,16 +184,22 @@ class AudioChat:
         Handle incoming WebSocket connections from the microcontroller.
         Expect messages like "BUTTON_PRESSED" and "BUTTON_RELEASED".
         """
-        async for message in websocket:
-            print("Received message from microcontroller:", message)
-            if message == "BUTTON_PRESSED":
-                print("Enabling audio transmission.")
-                self.audio_enabled_event.set()
-            elif message == "BUTTON_RELEASED":
-                print("Disabling audio transmission.")
-                self.audio_enabled_event.clear()
-            else:
-                print("Unknown command received:", message)
+        # Add the new websocket connection to the set
+        self.ws_connections.add(websocket)
+        try:
+            async for message in websocket:
+                print("Received message from microcontroller:", message)
+                if message == "BUTTON_PRESSED":
+                    print("Enabling audio transmission.")
+                    self.audio_enabled_event.set()
+                elif message == "BUTTON_RELEASED":
+                    print("Disabling audio transmission.")
+                    self.audio_enabled_event.clear()
+                else:
+                    print("Unknown command received:", message)
+        finally:
+            # Remove the connection when it closes
+            self.ws_connections.remove(websocket)
 
     async def run_websocket_server(self):
         """
