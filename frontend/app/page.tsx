@@ -1,17 +1,10 @@
-"use client";
+import ImageSlideshow from "./ImageSlideshow";
 
-import dynamic from "next/dynamic";
-
-const WebSocketPage = dynamic(() => import("./websocket/page"), { ssr: false });
-const MediaGallery = dynamic(() => import("./components/MediaGallery"), {
-    ssr: false,
-});
-
-export default function HomePage() {
+export default function Home() {
     return (
-        <div>
-            {/* <WebSocketPage /> */}
-            <MediaGallery />
-        </div>
+        <main style={{ padding: "2rem" }}>
+            <h2>Image Slideshow</h2>
+            <ImageSlideshow />
+        </main>
     );
 }
