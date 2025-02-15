@@ -2,12 +2,15 @@ import asyncio
 import os
 import traceback
 import json
+import time
 
 import pyaudio
+import cv2
+import numpy as np
 from google import genai
 from dotenv import load_dotenv
 
-import websockets  # <-- New import for the websocket server
+import websockets  # For both server and GPU client connections
 
 from google.genai.types import (
     FunctionDeclaration,
@@ -93,6 +96,8 @@ class AudioChat:
         self.audio_enabled_event = asyncio.Event()
         # Set to keep track of connected websocket clients (microcontrollers)
         self.ws_connections = set()
+        # Persistent connection to the GPU server (initially None)
+        self.gpu_ws = None
 
     async def listen_audio(self):
         """
@@ -109,14 +114,12 @@ class AudioChat:
             input_device_index=mic_info["index"],
             frames_per_buffer=CHUNK_SIZE,
         )
-        # In debug mode, disable exception_on_overflow.
         kwargs = {"exception_on_overflow": False} if __debug__ else {}
         while True:
             if self.audio_enabled_event.is_set():
                 data = await asyncio.to_thread(audio_stream.read, CHUNK_SIZE, **kwargs)
                 await self.out_queue.put({"data": data, "mime_type": "audio/pcm"})
             else:
-                # If audio is not enabled, wait a bit before checking again.
                 await asyncio.sleep(0.1)
 
     async def send_realtime(self):
@@ -130,9 +133,10 @@ class AudioChat:
     async def get_object(self, object_name: str) -> str:
         """
         Dummy implementation for a function call from Gemini.
-        Replace this with your own object lookup logic.
+        Broadcasts a "VIBRATE" message to all connected microcontrollers,
+        then (after receiving image data from the microcontroller) the images
+        will be processed and sent to the GPU server.
         """
-        # Broadcast "VIBRATE" message to all connected microcontrollers
         if self.ws_connections:
             for ws in self.ws_connections.copy():
                 try:
@@ -141,6 +145,37 @@ class AudioChat:
                     print("Error sending VIBRATE message:", e)
         result = f"Object '{object_name}' located at the default coordinates (42.3601, -71.0589)."
         return result
+
+    async def send_image_to_gpu(self, image_data: bytes):
+        """
+        Process an image received from the microcontroller:
+          - Decode the received image.
+          - Resize it to 480p (854x480).
+          - Compress it using JPEG encoding with a quality level of 60.
+          - Send the processed image bytes over the persistent GPU websocket.
+        """
+        np_arr = np.frombuffer(image_data, np.uint8)
+        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            print("Failed to decode received image.")
+            return
+
+        frame = cv2.resize(frame, (854, 480))
+        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 60]
+        success, buffer = cv2.imencode('.jpg', frame, encode_params)
+        if not success:
+            print("Failed to encode image as JPEG.")
+            return
+        frame_bytes = buffer.tobytes()
+
+        if self.gpu_ws is None:
+            print("GPU websocket not connected, cannot send image.")
+            return
+        try:
+            await self.gpu_ws.send(frame_bytes)
+            print("Sent processed image to GPU server.")
+        except Exception as e:
+            print("Error sending image to GPU server:", e)
 
     async def receive_audio(self):
         """
@@ -160,7 +195,6 @@ class AudioChat:
                             await self.session.send(input=result, end_of_turn=True)
                 if response.data:
                     self.audio_in_queue.put_nowait(response.data)
-
             while not self.audio_in_queue.empty():
                 self.audio_in_queue.get_nowait()
 
@@ -182,36 +216,55 @@ class AudioChat:
     async def websocket_handler(self, websocket, path=None):
         """
         Handle incoming WebSocket connections from the microcontroller.
-        Expect messages like "BUTTON_PRESSED" and "BUTTON_RELEASED".
+        Expect messages like "BUTTON_PRESSED", "BUTTON_RELEASED", or binary image data.
+        When binary data (an image) is received, process and forward it to the GPU server.
         """
-        # Add the new websocket connection to the set
         self.ws_connections.add(websocket)
         try:
             async for message in websocket:
-                print("Received message from microcontroller:", message)
-                if message == "BUTTON_PRESSED":
-                    print("Enabling audio transmission.")
-                    self.audio_enabled_event.set()
-                elif message == "BUTTON_RELEASED":
-                    print("Disabling audio transmission.")
-                    self.audio_enabled_event.clear()
+                if isinstance(message, bytes):
+                    await self.send_image_to_gpu(message)
                 else:
-                    print("Unknown command received:", message)
+                    print("Received message from microcontroller:", message)
+                    if message == "BUTTON_PRESSED":
+                        print("Enabling audio transmission.")
+                        self.audio_enabled_event.set()
+                    elif message == "BUTTON_RELEASED":
+                        print("Disabling audio transmission.")
+                        self.audio_enabled_event.clear()
+                    else:
+                        print("Unknown command received:", message)
         finally:
-            # Remove the connection when it closes
             self.ws_connections.remove(websocket)
 
     async def run_websocket_server(self):
         """
-        Run a WebSocket server to listen for commands from the microcontroller.
+        Run a WebSocket server to listen for commands and image data from the microcontroller.
         """
         async with websockets.serve(self.websocket_handler, "0.0.0.0", 8765):
             print("WebSocket server started on ws://0.0.0.0:8765")
             await asyncio.Future()  # run forever
 
+    async def connect_to_gpu(self):
+        """
+        Establish and maintain a persistent connection to the GPU websocket.
+        If the connection is lost, this task will attempt to reconnect.
+        """
+        while True:
+            try:
+                self.gpu_ws = await websockets.connect("ws://172.24.75.90:8000")
+                print("Connected to GPU websocket.")
+                await self.gpu_ws.wait_closed()
+                print("GPU websocket connection closed. Reconnecting...")
+            except Exception as e:
+                print("Error connecting to GPU websocket:", e)
+            self.gpu_ws = None
+            await asyncio.sleep(5)
+
     async def run(self):
         """
         Establish the Gemini session, start audio tasks, and run the WebSocket server concurrently.
+        Also starts the persistent GPU websocket connection.
         """
         try:
             async with CLIENT.aio.live.connect(model=MODEL, config=CONFIG) as session, asyncio.TaskGroup() as tg:
@@ -221,6 +274,7 @@ class AudioChat:
                 tg.create_task(self.receive_audio())
                 tg.create_task(self.play_audio())
                 tg.create_task(self.run_websocket_server())
+                tg.create_task(self.connect_to_gpu())
                 await asyncio.Future()  # Run indefinitely.
         except asyncio.CancelledError:
             pass
