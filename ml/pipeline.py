@@ -80,9 +80,11 @@ import os
 from google import genai
 from google.genai import types
 
-with open('google_api_key.txt', 'r') as file:
-    google_api_key = file.readline().strip()
-client = genai.Client(api_key=google_api_key)
+from dotenv import load_dotenv
+load_dotenv()
+
+
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 model_name = "gemini-2.0-flash" # @param ["gemini-1.5-flash-latest","gemini-2.0-flash-lite-preview-02-05","gemini-2.0-flash","gemini-2.0-pro-preview-02-05"] {"allow-input":true}
 
