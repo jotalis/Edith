@@ -18,28 +18,29 @@ from google.genai.types import (
     PrebuiltVoiceConfig,
     SpeechConfig,
     Tool,
+    Content,
+    Part,
     VoiceConfig,
 )
 
 # Load environment variables from a .env file
 load_dotenv()
 
-find_object = FunctionDeclaration(
-    name="find_object",
+find_entity = FunctionDeclaration(
+    name="find_entity",
     description=(
-        "Find an object by retrieving the details and location of a specified object. "
-        "This function should be called when the user asks about the whereabouts of an object, "
-        "such as 'Help me find my keys' or 'Where is my laptop?'."
+        "This function should be called when the user asks about the whereabouts or location or finding anything, "
+        "such as 'Help me find my keys' or 'Where is my laptop?' or 'help me find the old grandma'."
     ),
     parameters={
         "type": "OBJECT",
         "properties": {
-            "object_name": {
+            "object_description": {
                 "type": "STRING",
-                "description": "The name of the object to be located.",
+                "description": "A description of the object to be located.",
             },
         },
-        "required": ["object_name"],
+        "required": ["object_description"],
     },
 )
 
@@ -54,7 +55,7 @@ CHUNK_SIZE = 1024
 MODEL = "models/gemini-2.0-flash-exp"
 CONFIG = LiveConnectConfig(
     response_modalities=["AUDIO"],
-    tools=[Tool(function_declarations=[find_object])],
+    tools=[Tool(function_declarations=[find_entity])],
     speech_config=SpeechConfig(
         voice_config=VoiceConfig(
             prebuilt_voice_config=PrebuiltVoiceConfig(
@@ -62,11 +63,29 @@ CONFIG = LiveConnectConfig(
             )
         )
     ),
+    system_instruction=Content(
+        role="model",
+        parts=[
+            Part(
+                text="""
+                You are a companion for the visually impaired which gives them newfound confidence to navigate the world. In other words, you are their sixth sense that uses advanced depth data and 3D spatial reconstruction.
+
+                You have the following tool available to you:
+                - find_entity: Find the location of an object in the environment.
+
+                Rules:
+                - Whenever you're asked about the location or position of something you can use the find_entity tool. Then, once you have provided information from that tool, give relevant information about how they might reach that object. Are there any paths? Is there something in the way that they need to navigate around? Are there any helpful distinctive features nearby to anchor their understanding of the scene? You should mention things in this vein.
+                - If you ask for a description, remember that the user can not see. Use contextual information from images and past function call responses, if possible, to ask guiding questions.
+                    """
+            )
+        ],
+    ),
 )
 
 # PI Config
 PI_IP = "10.32.78.132"
-PI_IP = "10.32.72.225"
+PI_IP = "100.64.146.118"
+# PI_IP = "10.32.72.225"
 SNAPSHOT_URL = f"http://{PI_IP}:5000/snapshot"
 ANGLE_URL = f"http://{PI_IP}:5000/angle"
 
@@ -82,6 +101,7 @@ CLIENT = genai.Client(
 )
 
 WAIT = True
+
 
 class AudioChat:
     def __init__(self):
@@ -116,29 +136,28 @@ class AudioChat:
         """
         Read audio chunks from the output queue and send them to the GenAI session.
         """
-        last_image_time = time.monotonic()
-        
+        last_image_time = time.monotonic() - 8
+
         while True:
             # Send the next audio chunk
             msg = await self.out_queue.get()
             await self.session.send(input=msg)
-            
+
             now = time.monotonic()
             if now - last_image_time >= 8:
                 last_image_time = now  # Update the timestamp
                 try:
                     # Fetch the snapshot using requests in a thread
-                    response = await asyncio.to_thread(requests.get, SNAPSHOT_URL, timeout=5)
+                    response = await asyncio.to_thread(
+                        requests.get, SNAPSHOT_URL, timeout=5
+                    )
                     if response.status_code == 200:
                         # Here we assume the snapshot returns JPEG image data.
                         image_data = response.content  # Raw binary image data
                         # Prepare the input in the format expected by Gemini live multimodal.
                         # The input must be a dict with keys "data" and "mime_type".
-                        image_input = {
-                            "data": image_data,
-                            "mime_type": "image/jpeg"
-                        }
-                        
+                        image_input = {"data": image_data, "mime_type": "image/jpeg"}
+
                         # Send the image input to the session
                         await self.session.send(input=image_input)
                     else:
@@ -157,13 +176,27 @@ class AudioChat:
                 if response.tool_call:
                     for function_call in response.tool_call.function_calls:
                         print("function_call", function_call)
-                        if function_call.name == "find_object":
-                            print(function_call.args["object_name"])
-                            result = await self.get_object(
-                                function_call.args["object_name"]
+                        if function_call.name == "find_entity":
+                            print(function_call.args["object_description"])
+                            result = await self.find_entity(
+                                function_call.args["object_description"]
                             )
                             print(result)
-                            await self.session.send(input=result, end_of_turn=True)
+                            decoded_str, depth, angle = result
+                            # decoded_str = base64.b64decode(image).decode("utf-8")
+                            formatted_result = f"Give context about where the object is. Then inform the user that the {function_call.args["object_description"]} is located at {angle} degrees, {depth} meters away. Image Context: {decoded_str}"
+                            # encoded_str = result[0]
+
+                            # formatted_result = {
+                            #     "response": decoded_str,
+                            #     "value1": float(result[1]),
+                            #     "value2": float(result[2])
+                            # }
+
+                            # Send properly formatted data
+                            await self.session.send(
+                                input=formatted_result, end_of_turn=True
+                            )
 
                 if response.data:
                     self.audio_in_queue.put_nowait(response.data)
@@ -208,7 +241,7 @@ class AudioChat:
         finally:
             self.pya.terminate()
 
-    async def get_object(self, object_name: str) -> str:
+    async def find_entity(self, object_description: str) -> str:
         """
         Dummy implementation for a function call from Gemini.
         Replace this with your own object lookup logic.
@@ -231,30 +264,19 @@ class AudioChat:
         except requests.exceptions.RequestException as e:
             print(f"Error: {e}")
 
-        print("Fetching IMU data")
-        imu_data = None
-        try:
-            # Get IMU data from Raspberry Pi
-            imu_response = requests.get(ANGLE_URL, timeout=5)
-            if imu_response.status_code == 200:
-                imu_data = float(imu_response.text.strip())
-            else:
-                print(f"Failed to get IMU data: {imu_response.status_code}")
-
-        except requests.exceptions.RequestException as e:
-            print(f"IMU data error: {e}")
-
         print("Sending data to GPU for processing...")
-        if image_data is not None and imu_data is not None:
+        if image_data is not NotImplementedError:
             with open(image_path, "rb") as img_file:
                 files = {"image": img_file}
-                data = {"label": object_name, "angle": str(imu_data)}
+                data = {"label": object_description}
 
                 try:
-                    gpu_response = requests.post(GPU_PROCESS_URL, data=data, files=files, timeout=5)
+                    gpu_response = requests.post(
+                        GPU_PROCESS_URL, data=data, files=files, timeout=5
+                    )
                     gpu_response.raise_for_status()
                     gpu_json_response = gpu_response.json()
-                
+
                     # Extract values
                     metric_depth = gpu_json_response.get("depth", None)
                     object_angle = gpu_json_response.get("heading", None)
@@ -264,13 +286,20 @@ class AudioChat:
                 except requests.exceptions.RequestException as e:
                     print(f"GPU processing error: {e}")
 
-        file_names = ["segmentation.jpg", "depth.jpg", "bounding_box.jpg", "mesh.glb", "segmented_mesh.glb"]
+        file_names = [
+            "original.jpg",
+            "segmentation.jpg",
+            "depth.jpg",
+            "bounding_box.jpg",
+            "mesh.glb",
+            "segmented_mesh.glb",
+        ]
         download_directory = (
             "C:/Users/jayqw/Documents/swd/Treehacks/Edith/frontend/public/uploads"
         )
         for name in file_names:
             file_path = os.path.join(download_directory, name)
-            response = requests.get("http://172.24.75.90:8404/ml/" + name, stream=True)
+            response = requests.get("http://172.24.75.90:8405/" + name, stream=True)
             with open(file_path, "wb") as file:
                 for chunk in response.iter_content(chunk_size=1024):
                     if chunk:
@@ -281,14 +310,17 @@ class AudioChat:
         try:
             with open(file_path, "rb") as img_file:
                 bounding_box_b64 = base64.b64encode(img_file.read()).decode("utf-8")
-        
+
         except FileNotFoundError:
             print(f"File not found: {file_path}")
 
         input("Press Enter to continue...")
 
         # Heading, depth of object, and bounding box image
-        return (bounding_box_b64, metric_depth, object_angle)
+        try:
+            return (bounding_box_b64, str(float(metric_depth) * 0.8), object_angle)
+        except:
+            return "Please try again. I was unable to find the object you requested.", 0, 0
 
 
 if __name__ == "__main__":

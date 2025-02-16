@@ -186,7 +186,7 @@ export default function SlideShow() {
     const [modelBlur, setModelBlur] = useState(0);
 
     // Add new state for autoplay
-    const [isAutoPlaying, setIsAutoPlaying] = useState(true);
+    const [isAutoPlaying, setIsAutoPlaying] = useState(false);
     const autoPlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
     // Check required files on mount
