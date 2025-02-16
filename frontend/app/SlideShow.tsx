@@ -6,6 +6,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { useMediaStore, STAGE_MEDIA } from "../store";
 import { StageNumber } from "../store";
+import { motion } from "framer-motion";
 
 // -----------------------------------------------------------------------------
 // ThreeDModel Component
@@ -164,23 +165,99 @@ const ThreeDModel: FC<ThreeDModelProps> = ({ glbUrl }) => {
 // SlideShow Component
 // -----------------------------------------------------------------------------
 export default function SlideShow() {
-    const { getCurrentMedia, nextStage, previousStage, currentStage } =
-        useMediaStore();
+    const {
+        getCurrentMedia,
+        nextStage,
+        previousStage,
+        currentStage,
+        checkRequiredFiles,
+        areFilesChecked,
+        areFilesMissing,
+    } = useMediaStore();
     const currentMedia = getCurrentMedia();
     const showOverlays = currentStage !== StageNumber.Final;
-    // Add state for transition
     const [isTransitioning, setIsTransitioning] = useState(false);
     const [previousMedia, setPreviousMedia] = useState(currentMedia);
+
+    // Add opacity control for 3D models
+    const [modelOpacity, setModelOpacity] = useState(1);
+
+    // Add blur control for 3D models
+    const [modelBlur, setModelBlur] = useState(0);
+
+    // Add new state for autoplay
+    const [isAutoPlaying, setIsAutoPlaying] = useState(true);
+    const autoPlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+    // Check required files on mount
+    useEffect(() => {
+        checkRequiredFiles();
+    }, [checkRequiredFiles]);
+
+    // Handle auto-play functionality
+    useEffect(() => {
+        if (
+            !isAutoPlaying ||
+            isTransitioning ||
+            !areFilesChecked ||
+            areFilesMissing
+        )
+            return;
+
+        const randomDuration = Math.floor(
+            Math.random() * (3000 - 2000 + 1) + 2000
+        ); // Random duration between 2-3 seconds
+
+        autoPlayTimeoutRef.current = setTimeout(() => {
+            if (currentStage < StageNumber.Final) {
+                nextStage();
+            } else {
+                setIsAutoPlaying(false); // Stop when reaching the final stage
+            }
+        }, randomDuration);
+
+        return () => {
+            if (autoPlayTimeoutRef.current) {
+                clearTimeout(autoPlayTimeoutRef.current);
+            }
+        };
+    }, [
+        currentStage,
+        isTransitioning,
+        nextStage,
+        isAutoPlaying,
+        areFilesChecked,
+        areFilesMissing,
+    ]);
 
     // Update transition effect when media changes
     useEffect(() => {
         if (currentMedia !== previousMedia) {
             setIsTransitioning(true);
-            const timer = setTimeout(() => {
+            setModelOpacity(0);
+            setModelBlur(10); // Start with blur
+
+            // Sequence the transitions
+            const sequence = async () => {
+                // First phase - blur and fade out current
+                await new Promise((resolve) => setTimeout(resolve, 250));
+
+                // Second phase - switch content and start fade in
+                setModelOpacity(1);
+
+                // Final phase - remove blur and complete transition
+                await new Promise((resolve) => setTimeout(resolve, 250));
+                setModelBlur(0);
                 setIsTransitioning(false);
                 setPreviousMedia(currentMedia);
-            }, 500); // Duration matches CSS transition
-            return () => clearTimeout(timer);
+            };
+
+            sequence();
+
+            return () => {
+                setModelBlur(0);
+                setModelOpacity(1);
+            };
         }
     }, [currentMedia, previousMedia]);
 
@@ -201,28 +278,76 @@ export default function SlideShow() {
         return () => window.removeEventListener("keydown", handleKeyDown);
     }, [handleKeyDown]);
 
+    // Update the return statement to show loading or missing files message
+    if (!areFilesChecked) {
+        return (
+            <div className="relative h-screen w-screen bg-black flex items-center justify-center">
+                <p className="text-white text-xl">Checking required files...</p>
+            </div>
+        );
+    }
+
+    if (areFilesMissing) {
+        return (
+            <div className="relative h-screen w-screen bg-black flex items-center justify-center">
+                <div className="flex flex-col gap-5 justify-center items-center">
+                    <p className="text-white font-mono text-center">
+                        Waiting for files
+                    </p>
+                    <div className="flex flex-row gap-6 items-center">
+                        <div className="relative flex w-52 h-1.5 bg-gray-100 bg-opacity-20 backdrop-blur-md border-[0.5px] border-white/40 font-mono text-sm text-white overflow-hidden">
+                            <motion.div
+                                className="absolute h-full bg-white/50"
+                                initial={{ width: 32, left: -32 }}
+                                animate={{
+                                    left: ["-32px", "208px"],
+                                }}
+                                transition={{
+                                    duration: 1.5,
+                                    repeat: Infinity,
+                                    ease: "linear",
+                                    repeatType: "loop",
+                                }}
+                            />
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="relative h-screen w-screen bg-black flex items-center justify-center">
             {currentMedia && (
                 <>
+                    {/* Show previous media during transition */}
+                    {isTransitioning && (
+                        <div
+                            className="absolute inset-0 transition-all duration-500"
+                            style={{
+                                opacity: 0,
+                                filter: `blur(${modelBlur}px)`,
+                            }}
+                        >
+                            {previousMedia?.type === "image" ? (
+                                <img
+                                    src={previousMedia.path}
+                                    alt=""
+                                    className="w-full h-full object-cover"
+                                />
+                            ) : (
+                                <div className="relative w-full h-full">
+                                    <ThreeDModel
+                                        glbUrl={previousMedia?.path || ""}
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Current media */}
                     {currentMedia.type === "image" ? (
                         <div className="relative w-full h-full overflow-hidden">
-                            {/* Previous image */}
-                            {isTransitioning &&
-                                previousMedia?.type === "image" && (
-                                    <img
-                                        key={previousMedia.path + "-previous"}
-                                        src={previousMedia.path}
-                                        alt=""
-                                        className="absolute inset-0 w-full h-full object-cover transition-all duration-500"
-                                        style={{
-                                            filter: "blur(0px)",
-                                            opacity: 0,
-                                        }}
-                                    />
-                                )}
-
-                            {/* Current image with transition */}
                             <img
                                 key={currentMedia.path + "-blur"}
                                 src={currentMedia.path}
@@ -261,10 +386,28 @@ export default function SlideShow() {
                         </div>
                     ) : (
                         <div className="relative w-full h-full">
-                            <ThreeDModel
-                                key={currentMedia.path}
-                                glbUrl={currentMedia.path}
-                            />
+                            {/* Main 3D model container - no blur here to allow interactions */}
+                            <div
+                                className="relative w-full h-full transition-opacity duration-500"
+                                style={{ opacity: modelOpacity }}
+                            >
+                                <ThreeDModel
+                                    key={currentMedia.path}
+                                    glbUrl={currentMedia.path}
+                                />
+                            </div>
+
+                            {/* Separate blur overlay that doesn't block interactions */}
+                            {(isTransitioning || modelBlur > 0) && (
+                                <div
+                                    className="absolute inset-0 transition-all duration-500 pointer-events-none"
+                                    style={{
+                                        filter: `blur(${modelBlur}px)`,
+                                        backgroundColor: "rgba(0,0,0,0.1)",
+                                    }}
+                                />
+                            )}
+
                             {showOverlays && (
                                 <div className="absolute inset-0 z-10 pointer-events-none">
                                     <div className="absolute inset-0 bg-grid-small-white/[0.2]" />

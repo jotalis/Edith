@@ -12,6 +12,7 @@ import { motion } from "framer-motion";
 const Overlay = () => {
     const stage = numberToStage(useMediaStore((state) => state.currentStage));
     const stageNum = useMediaStore((state) => state.getStageNumber());
+    const areFilesMissing = useMediaStore((state) => state.areFilesMissing);
 
     const handleClear = async () => {
         try {
@@ -51,23 +52,23 @@ const Overlay = () => {
     }) => {
         return (
             <div className="flex flex-row gap-6 items-center">
-                <div className="flex w-52 h-1.5 bg-gray-100 bg-opacity-20 backdrop-blur-md border-[0.5px] border-white/40 font-mono text-sm text-white overflow-hidden">
+                <div className="relative flex w-52 h-1.5 bg-gray-100 bg-opacity-20 backdrop-blur-md border-[0.5px] border-white/40 font-mono text-sm text-white overflow-hidden">
                     {completed ? (
                         <div className="h-full bg-white w-full" />
                     ) : (
-                        <>
-                            <motion.div
-                                className="h-full bg-white/50 w-8"
-                                animate={{
-                                    x: ["-100%", "208px"],
-                                }}
-                                transition={{
-                                    duration: 1,
-                                    repeat: Infinity,
-                                    ease: "linear",
-                                }}
-                            />
-                        </>
+                        <motion.div
+                            className="absolute h-full bg-white/50"
+                            initial={{ width: 32, left: -32 }}
+                            animate={{
+                                left: ["-32px", "208px"],
+                            }}
+                            transition={{
+                                duration: 1.5,
+                                repeat: Infinity,
+                                ease: "linear",
+                                repeatType: "loop",
+                            }}
+                        />
                     )}
                 </div>
                 <div className="text-white text-xs">{stageName}</div>
@@ -121,7 +122,7 @@ const Overlay = () => {
             <div className="flex flex-col h-full w-full justify-between">
                 <div className="flex flex-row w-full h-fit justify-between">
                     <div className="flex gap-3">
-                        <div className="px-2 py-1 bg-gray-100 uppercase">
+                        <div className="px-2 py-1 bg-gray-100 uppercase text-black">
                             Edith
                         </div>
                         <GlassLabel className="flex gap-3 items-center">
@@ -138,26 +139,26 @@ const Overlay = () => {
                         <GlassLabel>RAM 75%</GlassLabel>
                     </div>
                 </div>
-                {/* TODO: implement dynamic progress bars based on stage */}
                 <div className="flex flex-row w-full h-fit justify-between items-end">
-                    <div className="flex flex-col gap-5">
-                        <div className="flex flex-col gap-2">
-                            {stageNum >= 0 &&
-                                getCurrentAndPreviousStages().map(
-                                    (stageName) => (
-                                        <ProgressBar
-                                            key={stageName}
-                                            completed={isStageCompleted(
-                                                stageName
-                                            )}
-                                            stageName={stageName}
-                                        />
-                                    )
-                                )}
+                    {!areFilesMissing ? (
+                        <div className="flex flex-col gap-5">
+                            <div className="flex flex-col gap-2">
+                                {stageNum >= 0 &&
+                                    getCurrentAndPreviousStages().map(
+                                        (stageName) => (
+                                            <ProgressBar
+                                                key={stageName}
+                                                completed={isStageCompleted(
+                                                    stageName
+                                                )}
+                                                stageName={stageName}
+                                            />
+                                        )
+                                    )}
+                            </div>
+                            <StageBar stageNum={stageNum} />
                         </div>
-                        <StageBar stageNum={stageNum} />
-                    </div>
-                    {/* Updated the "Clear" button to attach the handleClear functionality */}
+                    ) : null}
                     <GlassLabel
                         onClick={handleClear}
                         className="cursor-pointer"

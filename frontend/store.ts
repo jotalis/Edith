@@ -46,6 +46,16 @@ const numberToStage = (num: number): Stage => {
     return stageKey as Stage;
 };
 
+// Add this near the top of the file
+const REQUIRED_FILES = [
+    "/uploads/original.jpg",
+    "/uploads/bounding_box.jpg",
+    "/uploads/segmentation.jpg",
+    "/uploads/depth.jpg",
+    "/uploads/mesh.glb",
+    "/uploads/segmented_mesh.glb",
+];
+
 interface MediaStore {
     currentStage: StageNumber;
     getCurrentMedia: () => { path: string; type: "image" | "glb" };
@@ -53,6 +63,9 @@ interface MediaStore {
     previousStage: () => void;
     setStageByNumber: (stageNum: number) => void;
     getStageNumber: () => number;
+    checkRequiredFiles: () => Promise<boolean>;
+    areFilesChecked: boolean;
+    areFilesMissing: boolean;
 }
 
 export const useMediaStore = create<MediaStore>((set, get) => ({
@@ -63,17 +76,22 @@ export const useMediaStore = create<MediaStore>((set, get) => ({
     },
 
     nextStage: () =>
-        set((state) => ({
-            currentStage:
-                (state.currentStage + 1) % Object.keys(StageNumber).length,
-        })),
+        set((state) => {
+            // Only increment if not at the last stage
+            if (state.currentStage < Object.keys(STAGE_MEDIA).length - 1) {
+                return { currentStage: state.currentStage + 1 };
+            }
+            return state; // Return unchanged state if at last stage
+        }),
 
     previousStage: () =>
-        set((state) => ({
-            currentStage:
-                (state.currentStage - 1 + Object.keys(StageNumber).length) %
-                Object.keys(StageNumber).length,
-        })),
+        set((state) => {
+            // Only decrement if not at the first stage
+            if (state.currentStage > 0) {
+                return { currentStage: state.currentStage - 1 };
+            }
+            return state; // Return unchanged state if at first stage
+        }),
 
     setStageByNumber: (stageNum: number) =>
         set({
@@ -81,6 +99,27 @@ export const useMediaStore = create<MediaStore>((set, get) => ({
         }),
 
     getStageNumber: () => get().currentStage,
+
+    areFilesChecked: false,
+    areFilesMissing: false,
+
+    checkRequiredFiles: async () => {
+        try {
+            const results = await Promise.all(
+                REQUIRED_FILES.map(async (file) => {
+                    const response = await fetch(file, { method: "HEAD" });
+                    return response.ok;
+                })
+            );
+
+            const allFilesExist = results.every((exists) => exists);
+            set({ areFilesChecked: true, areFilesMissing: !allFilesExist });
+            return allFilesExist;
+        } catch (error) {
+            set({ areFilesChecked: true, areFilesMissing: true });
+            return false;
+        }
+    },
 }));
 
 export { stageToNumber, numberToStage, STAGE_MEDIA };
