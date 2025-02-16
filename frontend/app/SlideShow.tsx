@@ -222,7 +222,7 @@ export default function SlideShow() {
                                 alt=""
                                 className="absolute inset-0 w-full h-full object-cover"
                                 style={{
-                                    filter: "blur(50px)",
+                                    filter: "blur(20px)",
                                     transform: "scale(1.1)",
                                 }}
                             />
