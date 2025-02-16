@@ -2,9 +2,11 @@
 
 import React, { useEffect, useState, useCallback, useRef, FC } from "react";
 import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
-import { useMediaStore } from "../store";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { useMediaStore, STAGE_MEDIA } from "../store";
+import { StageNumber } from "../store";
+import { motion } from "framer-motion";
 
 // -----------------------------------------------------------------------------
 // ThreeDModel Component
@@ -33,13 +35,28 @@ const ThreeDModel: FC<ThreeDModelProps> = ({ glbUrl }) => {
                 0.1,
                 1000
             );
-            camera.position.z = 0;
+            // Move camera back so we can see the model
+            camera.position.set(0, 0, 5);
 
-            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            const renderer = new THREE.WebGLRenderer({
+                antialias: true,
+                alpha: true,
+            });
             renderer.setSize(width, height);
+            renderer.setClearColor(0x000000, 0);
+
+            // Clear any existing canvas
+            while (mountNode.firstChild) {
+                mountNode.removeChild(mountNode.firstChild);
+            }
             mountNode.appendChild(renderer.domElement);
 
-            // Add orbit controls for interaction
+            // Set the canvas style to ensure it receives events
+            renderer.domElement.style.position = "absolute";
+            renderer.domElement.style.zIndex = "20";
+            renderer.domElement.style.touchAction = "none";
+
+            // Improve OrbitControls setup
             const orbitControls = new OrbitControls(
                 camera,
                 renderer.domElement
@@ -49,31 +66,43 @@ const ThreeDModel: FC<ThreeDModelProps> = ({ glbUrl }) => {
             orbitControls.enablePan = true;
             orbitControls.enableZoom = true;
             orbitControls.enableRotate = true;
-            // orbitControls.autoRotateSpeed = 2.0;
-            // Set to false if you do not want user control
-            orbitControls.enabled = true;
+            orbitControls.minDistance = 2;
+            orbitControls.maxDistance = 10;
             controlsRef.current = orbitControls;
 
-            // Lighting setup
-            const ambientLight = new THREE.AmbientLight(0xffffff, 1);
+            // Improve lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
             scene.add(ambientLight);
 
             const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-            directionalLight.position.set(5, 5, 5).normalize();
+            directionalLight.position.set(5, 5, 5);
             scene.add(directionalLight);
 
-            // Load GLB Model using the provided URL
+            // Add type safety to GLTF loader
             const loader = new GLTFLoader();
             loader.load(
                 glbUrl,
-                (gltf) => {
+                (gltf: { scene: THREE.Object3D }) => {
                     console.log("GLTF loaded successfully:", gltf);
                     scene.add(gltf.scene);
-                    gltf.scene.position.set(0, 0, 0);
-                    gltf.scene.scale.set(1, 1, 1);
+
+                    // Center the model
+                    const box = new THREE.Box3().setFromObject(gltf.scene);
+                    const center = box.getCenter(new THREE.Vector3());
+                    gltf.scene.position.x = -center.x;
+                    gltf.scene.position.y = -center.y;
+                    gltf.scene.position.z = -center.z;
+
+                    // Scale up the model more
+                    gltf.scene.scale.setScalar(3.5);
+
+                    // Auto-adjust camera to fit model, but even closer
+                    const size = box.getSize(new THREE.Vector3());
+                    const maxDim = Math.max(size.x, size.y, size.z);
+                    camera.position.z = maxDim * 1.0;
                 },
                 undefined,
-                (error) =>
+                (error: unknown) =>
                     console.error(
                         "An error occurred while loading the GLB:",
                         error
@@ -100,6 +129,8 @@ const ThreeDModel: FC<ThreeDModelProps> = ({ glbUrl }) => {
             window.addEventListener("resize", handleResize);
 
             return () => {
+                orbitControls.dispose();
+                renderer.dispose();
                 if (mountNode.contains(renderer.domElement)) {
                     mountNode.removeChild(renderer.domElement);
                 }
@@ -116,13 +147,16 @@ const ThreeDModel: FC<ThreeDModelProps> = ({ glbUrl }) => {
     }, [initScene]);
 
     return (
-        <div className="h-full w-full overflow-hidden rounded-2xl bg-black">
-            <div style={{ width: "100%", height: "100%" }}>
-                <div
-                    ref={mountRef}
-                    style={{ width: "100%", height: "100%" }}
-                ></div>
-            </div>
+        <div className="absolute inset-0" style={{ zIndex: 30 }}>
+            <div
+                ref={mountRef}
+                className="w-full h-full"
+                style={{
+                    position: "relative",
+                    touchAction: "none",
+                    pointerEvents: "auto",
+                }}
+            />
         </div>
     );
 };
@@ -131,62 +165,112 @@ const ThreeDModel: FC<ThreeDModelProps> = ({ glbUrl }) => {
 // SlideShow Component
 // -----------------------------------------------------------------------------
 export default function SlideShow() {
-    // Get images and GLB files from the zustand store
-    const images = useMediaStore((state) => state.images);
-    const glbs = useMediaStore((state) => state.glbFiles);
-    const setImages = useMediaStore((state) => state.setImages);
-    const setGlbs = useMediaStore((state) => state.setGlbs);
-    const clearImages = useMediaStore((state) => state.clearImages);
-    const clearGlbs = useMediaStore((state) => state.clearGlbs);
+    const {
+        getCurrentMedia,
+        nextStage,
+        previousStage,
+        currentStage,
+        checkRequiredFiles,
+        areFilesChecked,
+        areFilesMissing,
+    } = useMediaStore();
+    const currentMedia = getCurrentMedia();
+    const showOverlays = currentStage !== StageNumber.Final;
+    const [isTransitioning, setIsTransitioning] = useState(false);
+    const [previousMedia, setPreviousMedia] = useState(currentMedia);
 
-    // currentIndex is used for both images and GLBs combined
-    const [currentIndex, setCurrentIndex] = useState(0);
+    // Add opacity control for 3D models
+    const [modelOpacity, setModelOpacity] = useState(1);
 
-    // Fetch uploaded data from a single endpoint every 5 seconds
+    // Add blur control for 3D models
+    const [modelBlur, setModelBlur] = useState(0);
+
+    // Add new state for autoplay
+    const [isAutoPlaying, setIsAutoPlaying] = useState(true);
+    const autoPlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+    // Check required files on mount
     useEffect(() => {
-        async function fetchData() {
-            try {
-                const res = await fetch("/api/uploaded-data");
-                if (res.ok) {
-                    const data = await res.json();
-                    console.log("Fetched data:", data);
-                    setImages(data.images);
-                    setGlbs(data.glbs);
-                }
-            } catch (error) {
-                console.error("Error fetching uploaded data:", error);
+        checkRequiredFiles();
+    }, [checkRequiredFiles]);
+
+    // Handle auto-play functionality
+    useEffect(() => {
+        if (
+            !isAutoPlaying ||
+            isTransitioning ||
+            !areFilesChecked ||
+            areFilesMissing
+        )
+            return;
+
+        const randomDuration = Math.floor(
+            Math.random() * (3000 - 2000 + 1) + 2000
+        ); // Random duration between 2-3 seconds
+
+        autoPlayTimeoutRef.current = setTimeout(() => {
+            if (currentStage < StageNumber.Final) {
+                nextStage();
+            } else {
+                setIsAutoPlaying(false); // Stop when reaching the final stage
             }
-        }
-        fetchData();
-        const interval = setInterval(fetchData, 5000);
-        return () => clearInterval(interval);
-    }, [setImages, setGlbs]);
+        }, randomDuration);
 
-    // Total slides is the sum of images and GLB files
-    const totalSlides = images.length + glbs.length;
+        return () => {
+            if (autoPlayTimeoutRef.current) {
+                clearTimeout(autoPlayTimeoutRef.current);
+            }
+        };
+    }, [
+        currentStage,
+        isTransitioning,
+        nextStage,
+        isAutoPlaying,
+        areFilesChecked,
+        areFilesMissing,
+    ]);
 
-    // Ensure currentIndex stays within bounds
+    // Update transition effect when media changes
     useEffect(() => {
-        if (totalSlides === 0) {
-            setCurrentIndex(0);
-        } else if (currentIndex >= totalSlides) {
-            setCurrentIndex(totalSlides - 1);
-        }
-    }, [totalSlides, currentIndex]);
+        if (currentMedia !== previousMedia) {
+            setIsTransitioning(true);
+            setModelOpacity(0);
+            setModelBlur(10); // Start with blur
 
-    // Handle arrow key navigation for combined slides
+            // Sequence the transitions
+            const sequence = async () => {
+                // First phase - blur and fade out current
+                await new Promise((resolve) => setTimeout(resolve, 250));
+
+                // Second phase - switch content and start fade in
+                setModelOpacity(1);
+
+                // Final phase - remove blur and complete transition
+                await new Promise((resolve) => setTimeout(resolve, 250));
+                setModelBlur(0);
+                setIsTransitioning(false);
+                setPreviousMedia(currentMedia);
+            };
+
+            sequence();
+
+            return () => {
+                setModelBlur(0);
+                setModelOpacity(1);
+            };
+        }
+    }, [currentMedia, previousMedia]);
+
+    // Handle keyboard navigation
     const handleKeyDown = useCallback(
         (e: KeyboardEvent) => {
-            if (totalSlides === 0) return;
             if (e.key === "ArrowRight") {
-                setCurrentIndex((prev) => (prev + 1) % totalSlides);
+                nextStage();
             } else if (e.key === "ArrowLeft") {
-                setCurrentIndex(
-                    (prev) => (prev - 1 + totalSlides) % totalSlides
-                );
+                previousStage();
             }
         },
-        [totalSlides]
+        [nextStage, previousStage]
     );
 
     useEffect(() => {
@@ -194,64 +278,146 @@ export default function SlideShow() {
         return () => window.removeEventListener("keydown", handleKeyDown);
     }, [handleKeyDown]);
 
-    // Function to clear both images and GLBs from the server
-    const handleClear = async () => {
-        try {
-            const res = await fetch("/api/clear-uploads", { method: "DELETE" });
-            if (res.ok) {
-                clearImages();
-                clearGlbs();
-            } else {
-                console.error("Failed to clear uploads from the server");
-            }
-        } catch (error) {
-            console.error("Error clearing uploads:", error);
-        }
-    };
+    // Update the return statement to show loading or missing files message
+    if (!areFilesChecked) {
+        return (
+            <div className="relative h-screen w-screen bg-black flex items-center justify-center">
+                <p className="text-white text-xl">Checking required files...</p>
+            </div>
+        );
+    }
+
+    if (areFilesMissing) {
+        return (
+            <div className="relative h-screen w-screen bg-black flex items-center justify-center">
+                <div className="flex flex-col gap-5 justify-center items-center">
+                    <p className="text-white font-mono text-center">
+                        Waiting for files
+                    </p>
+                    <div className="flex flex-row gap-6 items-center">
+                        <div className="relative flex w-52 h-1.5 bg-gray-100 bg-opacity-20 backdrop-blur-md border-[0.5px] border-white/40 font-mono text-sm text-white overflow-hidden">
+                            <motion.div
+                                className="absolute h-full bg-white/50"
+                                initial={{ width: 32, left: -32 }}
+                                animate={{
+                                    left: ["-32px", "208px"],
+                                }}
+                                transition={{
+                                    duration: 1.5,
+                                    repeat: Infinity,
+                                    ease: "linear",
+                                    repeatType: "loop",
+                                }}
+                            />
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="relative h-screen w-screen bg-black flex items-center justify-center">
-            {/* Black Blur Gradient Background */}
-            <div className="absolute inset-0 before:absolute before:inset-0 before:bg-gradient-to-b before:from-black before:via-black/80 before:to-black blur-2xl" />
-
-            {totalSlides > 0 && (
+            {currentMedia && (
                 <>
-                    {currentIndex < images.length ? (
-                        <img
-                            key={images[currentIndex]}
-                            src={images[currentIndex]}
-                            alt=""
-                            className="relative max-w-full max-h-full object-contain"
-                        />
+                    {/* Show previous media during transition */}
+                    {isTransitioning && (
+                        <div
+                            className="absolute inset-0 transition-all duration-500"
+                            style={{
+                                opacity: 0,
+                                filter: `blur(${modelBlur}px)`,
+                            }}
+                        >
+                            {previousMedia?.type === "image" ? (
+                                <img
+                                    src={previousMedia.path}
+                                    alt=""
+                                    className="w-full h-full object-cover"
+                                />
+                            ) : (
+                                <div className="relative w-full h-full">
+                                    <ThreeDModel
+                                        glbUrl={previousMedia?.path || ""}
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Current media */}
+                    {currentMedia.type === "image" ? (
+                        <div className="relative w-full h-full overflow-hidden">
+                            <img
+                                key={currentMedia.path + "-blur"}
+                                src={currentMedia.path}
+                                alt=""
+                                className="absolute inset-0 w-full h-full object-cover"
+                                style={{
+                                    filter: "blur(15px)",
+                                    transform: "scale(1.1)",
+                                    transition: "filter 400ms ease-in-out",
+                                }}
+                            />
+
+                            <img
+                                key={currentMedia.path}
+                                src={currentMedia.path}
+                                alt=""
+                                className="relative w-full h-full object-cover transition-all duration-[400ms]"
+                                style={{
+                                    maskImage:
+                                        "radial-gradient(circle, white 60%, transparent 100%)",
+                                    WebkitMaskImage:
+                                        "radial-gradient(circle, white 60%, transparent 100%)",
+                                    filter: isTransitioning
+                                        ? "blur(7px)"
+                                        : "blur(0px)",
+                                    opacity: isTransitioning ? 0 : 1,
+                                }}
+                            />
+
+                            {showOverlays && (
+                                <>
+                                    <div className="absolute inset-0 bg-grid-small-white/[0.2]" />
+                                    <div className="absolute inset-0 bg-black/30" />
+                                </>
+                            )}
+                        </div>
                     ) : (
-                        <ThreeDModel
-                            key={glbs[currentIndex - images.length]} // force remount when URL changes
-                            glbUrl={glbs[currentIndex - images.length]}
-                        />
+                        <div className="relative w-full h-full">
+                            {/* Main 3D model container - no blur here to allow interactions */}
+                            <div
+                                className="relative w-full h-full transition-opacity duration-500"
+                                style={{ opacity: modelOpacity }}
+                            >
+                                <ThreeDModel
+                                    key={currentMedia.path}
+                                    glbUrl={currentMedia.path}
+                                />
+                            </div>
+
+                            {/* Separate blur overlay that doesn't block interactions */}
+                            {(isTransitioning || modelBlur > 0) && (
+                                <div
+                                    className="absolute inset-0 transition-all duration-500 pointer-events-none"
+                                    style={{
+                                        filter: `blur(${modelBlur}px)`,
+                                        backgroundColor: "rgba(0,0,0,0.1)",
+                                    }}
+                                />
+                            )}
+
+                            {showOverlays && (
+                                <div className="absolute inset-0 z-10 pointer-events-none">
+                                    <div className="absolute inset-0 bg-grid-small-white/[0.2]" />
+                                    <div className="absolute inset-0 bg-black/30" />
+                                </div>
+                            )}
+                        </div>
                     )}
                 </>
             )}
-
-            {/* Small Circular Clear Button (Bottom Right) */}
-            <button
-                onClick={handleClear}
-                className="absolute bottom-4 right-4 w-10 h-10 bg-black bg-opacity-50 rounded-full flex items-center justify-center hover:bg-opacity-70 focus:outline-none"
-            >
-                <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-6 w-6 text-white"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                >
-                    <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth="2"
-                        d="M6 18L18 6M6 6l12 12"
-                    />
-                </svg>
-            </button>
         </div>
     );
 }
