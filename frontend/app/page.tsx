@@ -1,10 +1,9 @@
-import ImageSlideshow from "./ImageSlideshow";
+import SlideShow from "./SlideShow";
 
 export default function Home() {
     return (
-        <main style={{ padding: "2rem" }}>
-            <h2>Image Slideshow</h2>
-            <ImageSlideshow />
+        <main className="min-h-screen bg-gray-900">
+            <SlideShow />
         </main>
     );
 }
