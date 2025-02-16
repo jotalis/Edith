@@ -104,7 +104,7 @@ def initialize_models():
             threshold="BLOCK_ONLY_HIGH",
         ),
     ]
-    object_name = "window"
+    object_name = ""
 
     # -------------------------------
     # SAM Initialization (on cuda:2)
@@ -127,7 +127,7 @@ def parse_json(json_output: str) -> str:
         json_output = json_output[:-3]
     return json_output.strip()
 
-async def send_post_request(depth_bytes, bbox_bytes, seg_bytes, mesh_bytes, seg_mesh_bytes):
+async def send_post_request(depth_bytes, bbox_bytes, seg_bytes, mesh_bytes, seg_mesh_bytes, depth, heading):
     """
     Send the processed files to the web app via an HTTP POST request.
     Adjust the URL to match your Next.js endpoint.
@@ -143,6 +143,11 @@ async def send_post_request(depth_bytes, bbox_bytes, seg_bytes, mesh_bytes, seg_
     form.add_field("glbFiles", mesh_bytes, filename="mesh.glb", content_type="model/gltf-binary")
     form.add_field("glbFiles", seg_mesh_bytes, filename="segmesh.glb", content_type="model/gltf-binary")
     
+    # Add additional fields for depth and heading (converting floats to strings)
+    form.add_field("depth", str(depth), content_type="text/plain")
+    form.add_field("heading", str(heading), content_type="text/plain")
+
+
     async with aiohttp.ClientSession() as session:
         async with session.post(url, data=form) as response:
             try:
@@ -157,6 +162,9 @@ async def ai_server(websocket, path=None):
     try:
         async for data in websocket:
             try:
+                if isinstance(data, str): 
+                    object_name = data
+
                 # -------------------------------
                 # 1. Decode the received image bytes
                 # -------------------------------
@@ -298,6 +306,11 @@ async def ai_server(websocket, path=None):
                 bbox_bytes_data = bbox_encoded.tobytes()
                 seg_bytes_data = seg_encoded.tobytes()
 
+                # HARDCODED for now
+
+                metric_depth_data = 10.3
+                heading_data = 124.21
+
                 # -------------------------------
                 # Send the POST request with all files
                 # -------------------------------
@@ -306,7 +319,10 @@ async def ai_server(websocket, path=None):
                     bbox_bytes_data,
                     seg_bytes_data,
                     mesh_bytes,
-                    seg_mesh_bytes
+                    seg_mesh_bytes,
+                    metric_depth_data,
+                    heading_data,
+
                 )
 
                 # Optionally notify the client that the POST was sent.
