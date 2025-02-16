@@ -17,10 +17,10 @@ export default function ImageSlideshow() {
             }
         }
 
-        fetchImages(); 
+        fetchImages();
         const interval = setInterval(fetchImages, 5000);
 
-        return () => clearInterval(interval); 
+        return () => clearInterval(interval);
     }, [addImages]);
 
     if (images.length === 0) {

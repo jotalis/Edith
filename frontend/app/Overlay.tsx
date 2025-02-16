@@ -1,24 +1,22 @@
 "use client";
 
-import React, { useState } from "react";
-import { useMediaStore } from "../store";
+import React from "react";
+import {
+    useMediaStore,
+    StageNumber,
+    type Stage,
+    numberToStage,
+} from "../store";
+import { motion } from "framer-motion";
 
 const Overlay = () => {
-    const [stageName, setStageName] = useState("Bounding box");
-    const [stageNum, setStageNum] = useState(1);
+    const stage = numberToStage(useMediaStore((state) => state.currentStage));
+    const stageNum = useMediaStore((state) => state.getStageNumber());
 
-    // Retrieve clear functions from the store
-    const clearImages = useMediaStore((state) => state.clearImages);
-    const clearGlbs = useMediaStore((state) => state.clearGlbs);
-
-    // New clear handler moved from SlideShow.tsx
     const handleClear = async () => {
         try {
             const res = await fetch("/api/clear-uploads", { method: "DELETE" });
-            if (res.ok) {
-                clearImages();
-                clearGlbs();
-            } else {
+            if (!res.ok) {
                 console.error("Failed to clear uploads from the server");
             }
         } catch (error) {
@@ -26,7 +24,6 @@ const Overlay = () => {
         }
     };
 
-    // Updated GlassLabel to forward extra props such as onClick
     const GlassLabel = ({
         children,
         className,
@@ -45,21 +42,33 @@ const Overlay = () => {
         );
     };
 
-    // takes progress between 0-1
     const ProgressBar = ({
-        progress,
+        completed,
         stageName,
     }: {
-        progress: number;
+        completed: boolean;
         stageName: string;
     }) => {
         return (
             <div className="flex flex-row gap-6 items-center">
-                <div className="flex w-52 h-1.5 bg-gray-100 bg-opacity-20 backdrop-blur-md border-[0.5px] border-white/40 font-mono text-sm text-white">
-                    <div
-                        className="h-full bg-white"
-                        style={{ width: `${progress * 100}%` }}
-                    />
+                <div className="flex w-52 h-1.5 bg-gray-100 bg-opacity-20 backdrop-blur-md border-[0.5px] border-white/40 font-mono text-sm text-white overflow-hidden">
+                    {completed ? (
+                        <div className="h-full bg-white w-full" />
+                    ) : (
+                        <>
+                            <motion.div
+                                className="h-full bg-white/50 w-8"
+                                animate={{
+                                    x: ["-100%", "208px"],
+                                }}
+                                transition={{
+                                    duration: 1,
+                                    repeat: Infinity,
+                                    ease: "linear",
+                                }}
+                            />
+                        </>
+                    )}
                 </div>
                 <div className="text-white text-xs">{stageName}</div>
             </div>
@@ -77,7 +86,7 @@ const Overlay = () => {
     // takes stage number between 1-5 depending on stage
     const StageBar = ({ stageNum }: { stageNum: number }) => {
         return (
-            <div className="flex flex-row items-center gap-5">
+            <div className="flex flex-row items-center gap-4">
                 <StageDot filled={stageNum >= 1} />
                 <StageDot filled={stageNum >= 2} />
                 <StageDot filled={stageNum >= 3} />
@@ -86,6 +95,25 @@ const Overlay = () => {
                 <div className="text-xs text-white">{stageNum}/5 steps</div>
             </div>
         );
+    };
+
+    // Update this function to include current stage and all previous stages
+    const getCurrentAndPreviousStages = () => {
+        const allStages: Stage[] = Object.keys(StageNumber)
+            .filter((key) => isNaN(Number(key)))
+            .filter(
+                (stage) => StageNumber[stage as keyof typeof StageNumber] > 0
+            ) as Stage[];
+        // Include one more stage than the current stageNum to show the "in progress" stage
+        return allStages.slice(0, stageNum + 1);
+    };
+
+    // Update this helper to determine if stage is completed
+    const isStageCompleted = (stageName: string) => {
+        const stageIndex = StageNumber[stageName as keyof typeof StageNumber];
+        // If it's a previous stage, it's completed
+        // If it's the current stage, it's not completed
+        return stageIndex <= stageNum;
     };
 
     return (
@@ -113,7 +141,20 @@ const Overlay = () => {
                 {/* TODO: implement dynamic progress bars based on stage */}
                 <div className="flex flex-row w-full h-fit justify-between items-end">
                     <div className="flex flex-col gap-5">
-                        <ProgressBar progress={0.5} stageName={stageName} />
+                        <div className="flex flex-col gap-2">
+                            {stageNum >= 0 &&
+                                getCurrentAndPreviousStages().map(
+                                    (stageName) => (
+                                        <ProgressBar
+                                            key={stageName}
+                                            completed={isStageCompleted(
+                                                stageName
+                                            )}
+                                            stageName={stageName}
+                                        />
+                                    )
+                                )}
+                        </div>
                         <StageBar stageNum={stageNum} />
                     </div>
                     {/* Updated the "Clear" button to attach the handleClear functionality */}
