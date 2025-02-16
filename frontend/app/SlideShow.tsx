@@ -211,18 +211,37 @@ export default function SlideShow() {
 
     return (
         <div className="relative h-screen w-screen bg-black flex items-center justify-center">
-            {/* Black Blur Gradient Background */}
-            <div className="absolute inset-0 before:absolute before:inset-0 before:bg-gradient-to-b before:from-black before:via-black/80 before:to-black blur-2xl" />
-
             {totalSlides > 0 && (
                 <>
                     {currentIndex < images.length ? (
-                        <img
-                            key={images[currentIndex]}
-                            src={images[currentIndex]}
-                            alt=""
-                            className="relative max-w-full max-h-full object-contain"
-                        />
+                        <div className="relative w-full h-full overflow-hidden">
+                            {/* blurred background image */}
+                            <img
+                                key={images[currentIndex] + "-blur"}
+                                src={images[currentIndex]}
+                                alt=""
+                                className="absolute inset-0 w-full h-full object-cover"
+                                style={{
+                                    filter: "blur(50px)",
+                                    transform: "scale(1.1)",
+                                }}
+                            />
+                            {/* sharp image with radial mask for faded edges */}
+                            <img
+                                key={images[currentIndex]}
+                                src={images[currentIndex]}
+                                alt=""
+                                className="relative w-full h-full object-cover"
+                                style={{
+                                    maskImage:
+                                        "radial-gradient(circle, white 60%, transparent 100%)",
+                                    WebkitMaskImage:
+                                        "radial-gradient(circle, white 60%, transparent 100%)",
+                                }}
+                            />
+                            {/* bg grid overlay */}
+                            <div className="absolute inset-0 bg-grid-small-white/[0.2]" />
+                        </div>
                     ) : (
                         <ThreeDModel
                             key={glbs[currentIndex - images.length]} // force remount when URL changes
@@ -231,6 +250,9 @@ export default function SlideShow() {
                     )}
                 </>
             )}
+
+            {/* Move the black overlay here */}
+            <div className="absolute inset-0 bg-black/30" />
 
             {/* Small Circular Clear Button (Bottom Right) */}
             <button
