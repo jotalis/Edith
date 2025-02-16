@@ -66,7 +66,7 @@ def calculate_yaw_pitch_roll(acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z, dt):
     roll = roll_acc * 0.98 + roll_gyro * 0.02
     yaw = yaw_gyro  # Yaw is primarily derived from gyroscope
 
-    return math.degrees(yaw), math.degrees(pitch), math.degrees(roll)
+    return yaw * 180/math.pi, math.degrees(pitch), math.degrees(roll)
 
 # Initialize the I2C bus
 bus = smbus.SMBus(1)  # or bus = smbus.SMBus(0) for older Raspberry Pi models
@@ -118,6 +118,6 @@ while True:
     # Calculate yaw, pitch, and roll
     yaw, pitch, roll = calculate_yaw_pitch_roll(acc_x, acc_y, acc_z, Gx, Gy, Gz, dt)
 
-    print(f"Ax={Ax:.2f} Ay={Ay:.2f} Az={Az:.2f} Gx={Gx:.2f} Gy={Gy:.2f} Gz={Gz:.2f} Yaw={yaw:.2f} Pitch={pitch:.2f} Roll={roll:.2f}")
+    print(f"Yaw={yaw:.2f} Pitch={pitch:.2f} Roll={roll:.2f}")
     
     time.sleep(1)
